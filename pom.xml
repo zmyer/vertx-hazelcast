@@ -41,25 +41,8 @@
     <dependency>
       <groupId>com.hazelcast</groupId>
       <artifactId>hazelcast</artifactId>
-      <version>3.5.2</version>
-      <!-- Exclude some stuff that we don't need and probably are just hazelcast test time dependencies that leaked into
-      compile -->
-      <exclusions>
-        <exclusion>
-          <groupId>net.sourceforge.findbugs</groupId>
-          <artifactId>annotations</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.hazelcast</groupId>
-          <artifactId>hazelcast-code-generator</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.eclipsesource.minimal-json</groupId>
-          <artifactId>minimal-json</artifactId>
-        </exclusion>
-      </exclusions>
+      <version>3.6</version>
     </dependency>
-
     <dependency>
       <groupId>io.vertx</groupId>
       <artifactId>vertx-docgen</artifactId>
