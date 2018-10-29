@@ -17,18 +17,7 @@
 package io.vertx.spi.cluster.hazelcast;
 
 import com.hazelcast.config.Config;
-import com.hazelcast.config.XmlConfigBuilder;
-import com.hazelcast.core.Hazelcast;
-import com.hazelcast.core.HazelcastInstance;
-import com.hazelcast.core.IAtomicLong;
-import com.hazelcast.core.IMap;
-import com.hazelcast.core.ISemaphore;
-import com.hazelcast.core.LifecycleEvent;
-import com.hazelcast.core.LifecycleListener;
-import com.hazelcast.core.Member;
-import com.hazelcast.core.MemberAttributeEvent;
-import com.hazelcast.core.MembershipEvent;
-import com.hazelcast.core.MembershipListener;
+import com.hazelcast.core.*;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
@@ -46,24 +35,13 @@ import io.vertx.spi.cluster.hazelcast.impl.HazelcastAsyncMultiMap;
 import io.vertx.spi.cluster.hazelcast.impl.HazelcastInternalAsyncCounter;
 import io.vertx.spi.cluster.hazelcast.impl.HazelcastInternalAsyncMap;
 
-import java.io.BufferedInputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.WeakHashMap;
+import java.util.*;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import static java.util.concurrent.TimeUnit.*;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 /**
  * A cluster manager that uses Hazelcast
@@ -75,10 +53,7 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
   private static final Logger log = LoggerFactory.getLogger(HazelcastClusterManager.class);
 
   private static final String LOCK_SEMAPHORE_PREFIX = "__vertx.";
-
-  // Hazelcast config file
-  private static final String DEFAULT_CONFIG_FILE = "default-cluster.xml";
-  private static final String CONFIG_FILE = "cluster.xml";
+  private static final String NODE_ID_ATTRIBUTE = "__vertx.nodeId";
 
   /**
    * Set "vertx.hazelcast.async-api" system property to {@code true} to use the
@@ -98,7 +73,7 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
   private String membershipListenerId;
   private String lifecycleListenerId;
   private boolean customHazelcastCluster;
-  private Set<Member> members = new HashSet<>();
+  private Set<String> nodeIds = new HashSet<>();
   // Guarded by this
   private Set<HazelcastAsyncMultiMap> multimaps = Collections.newSetFromMap(new WeakHashMap<>(1));
 
@@ -111,16 +86,15 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
    * Constructor - gets config from classpath
    */
   public HazelcastClusterManager() {
-    // We have our own shutdown hook and need to ensure ours runs before Hazelcast is shutdown
-    System.setProperty("hazelcast.shutdownhook.enabled", "false");
   }
 
   /**
    * Constructor - config supplied
    *
-   * @param conf
+   * @param conf Hazelcast config, not null
    */
   public HazelcastClusterManager(Config conf) {
+    Objects.requireNonNull(conf, "The Hazelcast config cannot be null.");
     this.conf = conf;
   }
 
@@ -139,24 +113,26 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
       if (!active) {
         active = true;
 
-        // The hazelcast instance has been passed using the constructor.
-        if (customHazelcastCluster) {
-          nodeID = hazelcast.getLocalEndpoint().getUuid();
-          membershipListenerId = hazelcast.getCluster().addMembershipListener(this);
-          lifecycleListenerId = hazelcast.getLifecycleService().addLifecycleListener(this);
-          fut.complete();
-          return;
+        // The hazelcast instance has not been passed using the constructor.
+        if (!customHazelcastCluster) {
+          if (conf == null) {
+            conf = loadConfig();
+            if (conf == null) {
+              log.warn("Cannot find cluster configuration on 'vertx.hazelcast.config' system property, on the classpath, " +
+                "or specified programmatically. Using default hazelcast configuration");
+              conf = new Config();
+            }
+          }
+
+          // We have our own shutdown hook and need to ensure ours runs before Hazelcast is shutdown
+          conf.setProperty("hazelcast.shutdownhook.enabled", "false");
+
+          hazelcast = Hazelcast.newHazelcastInstance(conf);
         }
 
-        if (conf == null) {
-          conf = loadConfig();
-          if (conf == null) {
-            log.warn("Cannot find cluster configuration on 'vertx.hazelcast.config' system property, on the classpath, " +
-              "or specified programmatically. Using default hazelcast configuration");
-          }
-        }
-        hazelcast = Hazelcast.newHazelcastInstance(conf);
-        nodeID = hazelcast.getLocalEndpoint().getUuid();
+        Member localMember = hazelcast.getCluster().getLocalMember();
+        nodeID = localMember.getUuid();
+        localMember.setStringAttribute(NODE_ID_ATTRIBUTE, nodeID);
         membershipListenerId = hazelcast.getCluster().addMembershipListener(this);
         lifecycleListenerId = hazelcast.getLifecycleService().addLifecycleListener(this);
         fut.complete();
@@ -193,12 +169,12 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
 
   @Override
   public List<String> getNodes() {
-    Set<Member> members = hazelcast.getCluster().getMembers();
-    List<String> lMembers = new ArrayList<>();
-    for (Member member : members) {
-      lMembers.add(member.getUuid());
+    List<String> list = new ArrayList<>();
+    for (Member member : hazelcast.getCluster().getMembers()) {
+      String nodeIdAttribute = member.getStringAttribute(NODE_ID_ATTRIBUTE);
+      list.add(nodeIdAttribute != null ? nodeIdAttribute : member.getUuid());
     }
-    return lMembers;
+    return list;
   }
 
   @Override
@@ -283,6 +259,11 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
                 Thread.currentThread().interrupt();
               }
             }
+
+            if (customHazelcastCluster) {
+              hazelcast.getCluster().getLocalMember().removeAttribute(NODE_ID_ATTRIBUTE);
+            }
+
           } catch (Throwable t) {
             fut.fail(t);
           }
@@ -297,12 +278,16 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
     if (!active) {
       return;
     }
+    Member member = membershipEvent.getMember();
+    String memberNodeId = member.getStringAttribute(NODE_ID_ATTRIBUTE);
+    if (memberNodeId == null) {
+      memberNodeId = member.getUuid();
+    }
     try {
       multimaps.forEach(HazelcastAsyncMultiMap::clearCache);
       if (nodeListener != null) {
-        Member member = membershipEvent.getMember();
-        members.add(member);
-        nodeListener.nodeAdded(member.getUuid());
+        nodeIds.add(memberNodeId);
+        nodeListener.nodeAdded(memberNodeId);
       }
     } catch (Throwable t) {
       log.error("Failed to handle memberAdded", t);
@@ -314,12 +299,16 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
     if (!active) {
       return;
     }
+    Member member = membershipEvent.getMember();
+    String memberNodeId = member.getStringAttribute(NODE_ID_ATTRIBUTE);
+    if (memberNodeId == null) {
+      memberNodeId = member.getUuid();
+    }
     try {
       multimaps.forEach(HazelcastAsyncMultiMap::clearCache);
       if (nodeListener != null) {
-        Member member = membershipEvent.getMember();
-        members.remove(member);
-        nodeListener.nodeLeft(member.getUuid());
+        nodeIds.remove(memberNodeId);
+        nodeListener.nodeLeft(memberNodeId);
       }
     } catch (Throwable t) {
       log.error("Failed to handle memberRemoved", t);
@@ -334,18 +323,18 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
     multimaps.forEach(HazelcastAsyncMultiMap::clearCache);
     // Safeguard to make sure members list is OK after a partition merge
     if(lifecycleEvent.getState() == LifecycleEvent.LifecycleState.MERGED) {
-      final Set<Member> currentMembers = hazelcast.getCluster().getMembers();
-      Set<Member> newMembers = new HashSet<>(currentMembers);
-      newMembers.removeAll(members);
-      Set<Member> removedMembers = new HashSet<>(members);
-      removedMembers.removeAll(currentMembers);
-      for(Member m : newMembers) {
-        nodeListener.nodeAdded(m.getUuid());
+      final List<String> currentNodes = getNodes();
+      Set<String> newNodes = new HashSet<>(currentNodes);
+      newNodes.removeAll(nodeIds);
+      Set<String> removedMembers = new HashSet<>(nodeIds);
+      removedMembers.removeAll(currentNodes);
+      for (String nodeId : newNodes) {
+        nodeListener.nodeAdded(nodeId);
       }
-      for(Member m : removedMembers) {
-        nodeListener.nodeLeft(m.getUuid());
+      for (String nodeId : removedMembers) {
+        nodeListener.nodeLeft(nodeId);
       }
-      members.retainAll(currentMembers);
+      nodeIds.retainAll(currentNodes);
     }
   }
 
@@ -356,49 +345,6 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
 
   @Override
   public void memberAttributeChanged(MemberAttributeEvent memberAttributeEvent) {
-  }
-
-  private InputStream getConfigStream() {
-    InputStream is = getConfigStreamFromSystemProperty();
-    if (is == null) {
-      is = getConfigStreamFromClasspath(CONFIG_FILE, DEFAULT_CONFIG_FILE);
-    }
-    return is;
-  }
-
-  private InputStream getConfigStreamFromSystemProperty() {
-    String configProp = System.getProperty("vertx.hazelcast.config");
-    InputStream is = null;
-    if (configProp != null) {
-      if (configProp.startsWith("classpath:")) {
-        return getConfigStreamFromClasspath(configProp.substring("classpath:".length()), CONFIG_FILE);
-      }
-      File cfgFile = new File(configProp);
-      if (cfgFile.exists()) {
-        try {
-          is = new FileInputStream(cfgFile);
-        } catch (FileNotFoundException ex) {
-          log.warn("Failed to open file '" + configProp + "' defined in 'vertx.hazelcast.config'. Continuing " +
-            "classpath search for " + CONFIG_FILE);
-        }
-      }
-    }
-    return is;
-  }
-
-  private InputStream getConfigStreamFromClasspath(String configFile, String defaultConfig) {
-    InputStream is = null;
-    ClassLoader ctxClsLoader = Thread.currentThread().getContextClassLoader();
-    if (ctxClsLoader != null) {
-      is = ctxClsLoader.getResourceAsStream(configFile);
-    }
-    if (is == null) {
-      is = getClass().getClassLoader().getResourceAsStream(configFile);
-      if (is == null) {
-        is = getClass().getClassLoader().getResourceAsStream(defaultConfig);
-      }
-    }
-    return is;
   }
 
   /**
@@ -438,14 +384,7 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
    * @return a config object
    */
   public Config loadConfig() {
-    Config cfg = null;
-    try (InputStream is = getConfigStream();
-         InputStream bis = new BufferedInputStream(is)) {
-      cfg = new XmlConfigBuilder(bis).build();
-    } catch (IOException ex) {
-      log.error("Failed to read config", ex);
-    }
-    return cfg;
+    return ConfigUtil.loadConfig();
   }
 
   public HazelcastInstance getHazelcastInstance() {
@@ -506,6 +445,7 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
   private class HazelcastLock implements Lock {
 
     private final ISemaphore semaphore;
+    private final AtomicBoolean released = new AtomicBoolean();
 
     private HazelcastLock(ISemaphore semaphore) {
       this.semaphore = semaphore;
@@ -513,11 +453,12 @@ public class HazelcastClusterManager implements ClusterManager, MembershipListen
 
     @Override
     public void release() {
-      vertx.executeBlocking(future -> {
-        semaphore.release();
-        future.complete();
-      }, false, null);
+      if (released.compareAndSet(false, true)) {
+        vertx.executeBlocking(future -> {
+          semaphore.release();
+          future.complete();
+        }, false, null);
+      }
     }
   }
-
 }

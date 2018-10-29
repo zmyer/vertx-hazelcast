@@ -18,9 +18,17 @@ package examples;
 
 import com.hazelcast.config.Config;
 import com.hazelcast.core.HazelcastInstance;
+import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.spi.cluster.ClusterManager;
+import io.vertx.ext.healthchecks.HealthCheckHandler;
+import io.vertx.ext.healthchecks.HealthChecks;
+import io.vertx.ext.healthchecks.Status;
+import io.vertx.ext.web.Router;
+import io.vertx.spi.cluster.hazelcast.ClusterHealthCheck;
+import io.vertx.spi.cluster.hazelcast.ConfigUtil;
 import io.vertx.spi.cluster.hazelcast.HazelcastClusterManager;
 
 /**
@@ -62,9 +70,56 @@ public class Examples {
     });
   }
 
+  public void customizeDefaultConfig() {
+    Config hazelcastConfig = ConfigUtil.loadConfig();
+
+    hazelcastConfig.getGroupConfig()
+      .setName("my-cluster-name")
+      .setPassword("passwd");
+
+    ClusterManager mgr = new HazelcastClusterManager(hazelcastConfig);
+
+    VertxOptions options = new VertxOptions().setClusterManager(mgr);
+
+    Vertx.clusteredVertx(options, res -> {
+      if (res.succeeded()) {
+        Vertx vertx = res.result();
+      } else {
+        // failed!
+      }
+    });
+  }
+
   public void example3(HazelcastInstance hazelcastInstance) {
     ClusterManager mgr = new HazelcastClusterManager(hazelcastInstance);
     VertxOptions options = new VertxOptions().setClusterManager(mgr);
+    Vertx.clusteredVertx(options, res -> {
+      if (res.succeeded()) {
+        Vertx vertx = res.result();
+      } else {
+        // failed!
+      }
+    });
+  }
+
+  public void healthCheck(Vertx vertx) {
+    Handler<Future<Status>> procedure = ClusterHealthCheck.createProcedure(vertx);
+    HealthChecks checks = HealthChecks.create(vertx).register("cluster-health", procedure);
+  }
+
+  public void healthCheckHandler(Vertx vertx, HealthChecks checks) {
+    Router router = Router.router(vertx);
+    router.get("/readiness").handler(HealthCheckHandler.createWithHealthChecks(checks));
+  }
+
+  public void liteMemberConfig() {
+    Config hazelcastConfig = ConfigUtil.loadConfig()
+      .setLiteMember(true);
+
+    ClusterManager mgr = new HazelcastClusterManager(hazelcastConfig);
+
+    VertxOptions options = new VertxOptions().setClusterManager(mgr);
+
     Vertx.clusteredVertx(options, res -> {
       if (res.succeeded()) {
         Vertx vertx = res.result();

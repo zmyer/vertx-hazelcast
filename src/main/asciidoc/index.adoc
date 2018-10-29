@@ -44,7 +44,10 @@ when you are creating your Vert.x instance, for example:
 {@link examples.Examples#example1()}
 ----
 
+[[configcluster]]
 == Configuring this cluster manager
+
+=== Configuring with XML
 
 Usually the cluster manager is configured by a file
 https://github.com/vert-x3/vertx-hazelcast/blob/master/src/main/resources/default-cluster.xml[`default-cluster.xml`]
@@ -52,7 +55,7 @@ which is packaged inside the jar.
 
 If you want to override this configuration you can provide a file called `cluster.xml` on your classpath and this
 will be used instead. If you want to embed the `cluster.xml` file in a fat jar, it must be located at the root of the
-fat jar. If it's an external file, the*directory** containing the file must be added to the classpath. For
+fat jar. If it's an external file, the **directory** containing the file must be added to the classpath. For
 example, if you are using the _launcher_ class from Vert.x, the classpath enhancement can be done as follows:
 
 [source]
@@ -87,18 +90,36 @@ not be used.
 The xml file is a Hazelcast configuration file and is described in detail in the documentation on the Hazelcast
 web-site.
 
-You can also specify configuration programmatically if embedding:
+=== Configuring programmatically
+
+You can specify configuration programmatically if embedding:
 
 [source,$lang]
 ----
 {@link examples.Examples#example2()}
 ----
 
-Hazelcast supports several different transports including multicast and TCP. The default configuration uses
-multicast so you must have multicast enabled on your network for this to work.
+It might also be useful to customize an existing XML configuration.
+For example, you might want to change the cluster group name and password:
 
-For full documentation on how to configure the transport differently or use a different transport please consult the
-Hazelcast documentation.
+[source,$lang]
+----
+{@link examples.Examples#customizeDefaultConfig()}
+----
+
+`ConfigUtil#loadConfig` loads Hazelcast config XML and transform it into a `Config` object.
+The content is read from:
+
+. the location denoted by the `vertx.hazelcast.config` sysprop, if present, or
+. the `cluster.xml` file on the classpath, if present, or
+. the default config file
+
+=== Discovery options
+
+Hazelcast supports several different discovery options.
+The default configuration uses multicast so you must have multicast enabled on your network for this to work.
+
+For full documentation on how to configure discovery differently please consult the Hazelcast documentation.
 
 == Using an existing Hazelcast cluster
 
@@ -134,14 +155,12 @@ Notice that the custom Hazelcast instance need to be configured with:
 </semaphore>
 ----
 
-**IMPORTANT** Do not use Hazelcast clients or smart clients when using high-availability (HA, or fail-over) in your
-cluster as they do not notify when they leave the cluster and you may loose data, or leave the cluster in an
-inconsistent state. See https://github.com/vert-x3/vertx-hazelcast/issues/24 for more details.
+IMPORTANT: Hazelcast clients or smart clients are not supported.
 
-**IMPORTANT** Make sure Hazelcast is started before and shut down after Vert.x.
+IMPORTANT: Make sure Hazelcast is started before and shut down after Vert.x.
 Also, the Hazelcast shutdown hook should be disabled (see xml example, or via system property).
 
-=== Changing timeout for failed nodes
+== Changing timeout for failed nodes
 
 By default a node will be removed from the cluster if Hazelcast didn't receive a heartbeat for 300 seconds. To change
 this value `hazelcast.max.no.heartbeat.seconds` system property such as in:
@@ -158,15 +177,11 @@ http://docs.hazelcast.org/docs/3.6/manual/html-single/index.html#configuring-wit
 with system properties] for the other properties you can configure.
 
 == Using Hazelcast async methods
-Hazelcast's `IMap` and `IAtomicLong` interfaces can be used with async methods returning `ICompletableFuture<V>`,
-a natural fit for Vert.x threading model. Even though these interfaces have been available for a long time, they are not
-provided by the public `HazelcastInstance` API.
 
-The default behavior of the `HazelcastClusterManager` is to use the public API. Supplying the option
-`-Dvertx.hazelcast.async-api=true` on JVM startup, will indicate that the async Hazelcast API methods will be used to
-communicate with the hazelcast cluster. Effectively, this means that when this option is enabled,
-execution of all `Counter` operations and `AsyncMap.get`,`AsyncMap.put` and `AsyncMap.remove` operations will
-occur in the calling thread (the event loop), instead of a worker thread with `vertx.executeBlocking`.
+Hazelcast's `IMap` and `IAtomicLong` interfaces can be used with async methods returning `ICompletableFuture<V>`, a natural fit for Vert.x threading model.
+
+Supplying the option `-Dvertx.hazelcast.async-api=true` on JVM startup, will indicate that the async Hazelcast API methods will be used to communicate with the hazelcast cluster.
+Effectively, this means that when this option is enabled, execution of all `Counter` operations and `AsyncMap.get`,`AsyncMap.put` and `AsyncMap.remove` operations will occur in the calling thread (the event loop), instead of a worker thread with `vertx.executeBlocking`.
 
 == Trouble shooting clustering
 
@@ -285,4 +300,219 @@ dependencies {
  }
  compile "com.hazelcast:hazelcast:ENTER_YOUR_VERSION_HERE"
 }
+----
+
+== Configuring for Kubernetes
+
+On Kubernetes, Hazelcast should be configured to use the https://github.com/hazelcast/hazelcast-kubernetes[Hazelcast Kubernetes] plugin.
+
+First, add the `io.vertx:vertx-hazelcast:${vertx.version}` and `com.hazelcast:hazelcast-kubernetes:${hazelcast-kubernetes.version}` dependencies to your project.
+With Maven it looks like:
+
+[source,xml]
+----
+<dependency>
+  <groupId>io.vertx</groupId>
+  <artifactId>vertx-hazelcast</artifactId>
+  <version>${vertx.version}</version>
+</dependency>
+<dependency>
+  <groupId>com.hazelcast</groupId>
+  <artifactId>hazelcast-kubernetes</artifactId>
+  <version>${hazelcast-kubernetes.version}</version>
+</dependency>
+<dependency>
+----
+
+NOTE: If you use a different version of the Hazelcast core library, make sure to use a compatible version of the Kubernetes discovery plugin.
+
+The second step is to configure the discovery plugin inside of your Hazelcast configuration, by either providing a custom `cluster.xml` file or programmatically, as described in <<configcluster>>.
+
+The plugin provides two https://github.com/hazelcast/hazelcast-kubernetes#understanding-discovery-modes[discovery modes]: _Kubernetes API_ and _DNS Lookup_.
+Please refer to the plugin project page for pros and cons of both modes.
+
+In this document, we will use _DNS Lookup_ discovery. The following properties have to be changed / added:
+
+[source,xml]
+----
+<hazelcast>
+  <properties>
+    <property name="hazelcast.discovery.enabled">true</property> <!--1-->
+  </properties>
+
+  <network>
+    <join>
+      <multicast enabled="false"/> <!--2-->
+      <tcp-ip enabled="false" />
+
+      <discovery-strategies>
+        <discovery-strategy enabled="true" <!--3-->
+            class="com.hazelcast.kubernetes.HazelcastKubernetesDiscoveryStrategy">
+          <properties>
+            <property name="service-dns">MY-SERVICE-DNS-NAME</property> <!--4-->
+          </properties>
+        </discovery-strategy>
+      </discovery-strategies>
+    </join>
+  </network>
+</hazelcast>
+----
+<1> Activate Discovery SPI
+<2> Deactivate other discoveries
+<3> Activate the Kubernetes plugin
+<4> Service DNS, usually in the form of `MY-SERVICE-NAME.MY-NAMESPACE.svc.cluster.local` but depends on the Kubernetes distribution
+
+The `MY-SERVICE-DNS-NAME` value must be a *headless* Kubernetes service name that will be used by Hazelcast to identify all cluster members.
+A headless service can be created with:
+
+[source,yaml]
+----
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: MY-NAMESPACE
+  name: MY-SERVICE-NAME
+spec:
+  selector:
+    component: MY-SERVICE-NAME # <1>
+  clusterIP: None
+  ports:
+  - name: hz-port-name
+    port: 5701
+    protocol: TCP
+----
+<1> Cluster members selected by label
+
+Eventually, attach the `component` label to all deployments that should be part of the cluster:
+
+[source,yaml]
+----
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  namespace: MY-NAMESPACE
+spec:
+  template:
+    metadata:
+      labels:
+        component: MY-SERVICE-NAME
+----
+
+Further configuration details are available on the https://github.com/hazelcast/hazelcast-kubernetes[Hazelcast Kubernetes Plugin page].
+
+=== Rolling updates
+
+During rolling updates, it is recommended to replace pods one by one.
+
+To do so, we must configure Kubernetes to:
+
+* never start more than one new pod at once
+* forbid more than one unavailable pod during the process
+
+[source,yaml]
+----
+spec:
+  strategy:
+    type: Rolling
+    rollingParams:
+      updatePeriodSeconds: 10
+      intervalSeconds: 20
+      timeoutSeconds: 600
+      maxUnavailable: 1 <1>
+      maxSurge: 1 <2>
+----
+<1> the maximum number of pods that can be unavailable during the update process
+<2> the maximum number of pods that can be created over the desired number of pods
+
+Also, the pod readiness probe must take the cluster state into account.
+Please refer to the <<one-by-one, cluster administration>> section for details on how to implement a readiness probe with link:../../vertx-health-check/$lang/[Vert.x Health Checks].
+
+== Cluster administration
+
+The Hazelcast cluster manager works by turning Vert.x nodes into members of a Hazelcast cluster.
+As a consequence, Vert.x cluster manager administration should follow the Hazelcast management guidelines.
+
+First, let's take a step back and introduce data partitioning and split-brain syndrome.
+
+=== Data partitioning
+
+Each Vert.x node holds pieces of the clustering data: eventbus subscriptions, async map entries, clustered counters... etc.
+
+When a member joins or leaves the cluster, Hazelcast migrates data partitions.
+In other words, it moves data around to accomodate the new cluster topology.
+This process may take some time, depending on the amount of clustered data and number of nodes.
+
+=== Split-brain syndrome
+
+In a perfect world, there would be no network equipment failures.
+Reality is, though, that sooner or later your cluster will be divided into smaller groups, unable to see each others.
+
+Hazelcast is capable of merging the nodes back into a single cluster.
+But just as with data partition migrations, this process may take some time.
+Before the cluster is fully functional again, some eventbus consumers might not be able to get messages.
+Or high-availability may not be able to redeploy a failing verticle.
+
+[NOTE]
+====
+It is difficult (if possible at all) to make a difference between a network partition and:
+
+- long GC pauses (leading to missed heartbeats checks),
+- many nodes being killed forcefully, at-once, because you are deploying a new version of your application
+====
+
+=== Recommendations
+
+Considering the common clustering issues discussed above, it is recommended to stick to the following good practices.
+
+==== Graceful shutdown
+
+Avoid stopping members forcefully (e.g, `kill -9` a node).
+
+Of course process crashes are inevitable, but a graceful shutdown helps to get the remaining nodes in a stable state faster.
+
+[[one-by-one]]
+==== One node after the other
+
+When rolling a new version of your app, scaling-up or down your cluster, add or remove nodes one after the other.
+
+Stopping nodes one by one prevents the cluster from thinking a network partition occured.
+Adding them one by one allows for clean, incremental data partition migrations.
+
+The cluster safety can be verified with link:../../vertx-health-check/$lang/[Vert.x Health Checks]:
+
+[source,$lang]
+----
+{@link examples.Examples#healthCheck(io.vertx.core.Vertx)}
+----
+
+After creation, the health check can be exposed over HTTP with a link:../../vertx-web/$lang/[Vert.x Web] router handler:
+
+[source,$lang]
+----
+{@link examples.Examples#healthCheckHandler(io.vertx.core.Vertx, io.vertx.ext.healthchecks.HealthChecks)}
+----
+
+==== Using Lite Members
+
+To minimize the time a Vert.x cluster spends accomodating a new topology, you may use external data nodes and mark Vert.x nodes as https://docs.hazelcast.org/docs/latest/manual/html-single/#enabling-lite-members[_Lite Members_].
+
+_Lite Members_ participate in a Hazelcast cluster like regular members, but they do not own any data partition.
+Therefore, Hazelcast does not need to migrate partitions when such members are added or removed.
+
+IMPORTANT: You must start the external data nodes beforehand as Hazelcast won't create a cluster with _Lite Members_ only.
+
+To start an external node, you can use the Hazelcast distribution start script, or proceed programmatically.
+
+Vert.x nodes can be marked as _Lite Members_ in the XML configuration:
+
+[source,xml]
+----
+<lite-member enabled="true"/>
+----
+
+You can also do it programmatically:
+
+[source,$lang]
+----
+{@link examples.Examples#liteMemberConfig()}
 ----

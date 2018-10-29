@@ -14,27 +14,31 @@
  * under the License.
  */
 
-package io.vertx.ext.web.sstore;
+package io.vertx.core.shareddata;
 
 import io.vertx.Lifecycle;
 import io.vertx.LoggingTestWatcher;
 import io.vertx.core.Vertx;
 import io.vertx.core.spi.cluster.ClusterManager;
 import io.vertx.spi.cluster.hazelcast.HazelcastClusterManager;
+import org.junit.AfterClass;
+import org.junit.Ignore;
 import org.junit.Rule;
+import org.junit.Test;
+import org.junit.experimental.categories.Category;
 
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Random;
 
 /**
- * @author Thomas Segismont
+ * @author <a href="http://tfox.org">Tim Fox</a>
  */
-public class HazelcastClusteredSessionHandlerTest extends ClusteredSessionHandlerTest {
+@Category(HazelcastAsyncApi.class)
+public class HazelcastInternalClusteredAsyncMapTest extends ClusteredAsyncMapTest {
 
   static {
-    System.setProperty("hazelcast.wait.seconds.before.join", "0");
-    System.setProperty("hazelcast.local.localAddress", "127.0.0.1");
+    System.setProperty("vertx.hazelcast.async-api", "true");
   }
 
   @Rule
@@ -56,5 +60,17 @@ public class HazelcastClusteredSessionHandlerTest extends ClusteredSessionHandle
   @Override
   protected void closeClustered(List<Vertx> clustered) throws Exception {
     Lifecycle.closeClustered(clustered);
+  }
+
+  @Override
+  @Test
+  @Ignore("Hazelcast removes the binding even if a new entry is added without ttl")
+  public void testMapPutTtlThenPut() {
+    super.testMapPutTtlThenPut();
+  }
+
+  @AfterClass
+  public static void afterTests() {
+    System.clearProperty("vertx.hazelcast.async-api");
   }
 }

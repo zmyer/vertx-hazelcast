@@ -14,27 +14,29 @@
  * under the License.
  */
 
-package io.vertx.ext.web.sstore;
+package io.vertx.core.shareddata;
 
 import io.vertx.Lifecycle;
 import io.vertx.LoggingTestWatcher;
 import io.vertx.core.Vertx;
 import io.vertx.core.spi.cluster.ClusterManager;
 import io.vertx.spi.cluster.hazelcast.HazelcastClusterManager;
+import org.junit.AfterClass;
 import org.junit.Rule;
+import org.junit.experimental.categories.Category;
 
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Random;
 
 /**
- * @author Thomas Segismont
+ * @author <a href="http://tfox.org">Tim Fox</a>
  */
-public class HazelcastClusteredSessionHandlerTest extends ClusteredSessionHandlerTest {
+@Category(HazelcastAsyncApi.class)
+public class HazelcastInternalClusteredSharedCounterTest extends ClusteredSharedCounterTest {
 
   static {
-    System.setProperty("hazelcast.wait.seconds.before.join", "0");
-    System.setProperty("hazelcast.local.localAddress", "127.0.0.1");
+    System.setProperty("vertx.hazelcast.async-api", "true");
   }
 
   @Rule
@@ -56,5 +58,10 @@ public class HazelcastClusteredSessionHandlerTest extends ClusteredSessionHandle
   @Override
   protected void closeClustered(List<Vertx> clustered) throws Exception {
     Lifecycle.closeClustered(clustered);
+  }
+
+  @AfterClass
+  public static void afterTests() {
+    System.clearProperty("vertx.hazelcast.async-api");
   }
 }

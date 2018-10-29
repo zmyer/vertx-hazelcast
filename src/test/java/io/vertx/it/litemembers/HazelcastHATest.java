@@ -14,47 +14,67 @@
  * under the License.
  */
 
-package io.vertx.ext.web.sstore;
+package io.vertx.it.litemembers;
 
+import com.hazelcast.core.Hazelcast;
+import com.hazelcast.core.HazelcastInstance;
 import io.vertx.Lifecycle;
 import io.vertx.LoggingTestWatcher;
+import io.vertx.core.HATest;
 import io.vertx.core.Vertx;
 import io.vertx.core.spi.cluster.ClusterManager;
+import io.vertx.spi.cluster.hazelcast.ConfigUtil;
 import io.vertx.spi.cluster.hazelcast.HazelcastClusterManager;
 import org.junit.Rule;
 
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author Thomas Segismont
  */
-public class HazelcastClusteredSessionHandlerTest extends ClusteredSessionHandlerTest {
+public class HazelcastHATest extends HATest {
 
-  static {
-    System.setProperty("hazelcast.wait.seconds.before.join", "0");
-    System.setProperty("hazelcast.local.localAddress", "127.0.0.1");
-  }
+  private static final int DATA_NODES = Integer.getInteger("litemembers.datanodes.count", 1);
 
   @Rule
   public LoggingTestWatcher watchman = new LoggingTestWatcher();
+
+  private List<HazelcastInstance> dataNodes = new ArrayList<>();
 
   @Override
   public void setUp() throws Exception {
     Random random = new Random();
     System.setProperty("vertx.hazelcast.test.group.name", new BigInteger(128, random).toString(32));
     System.setProperty("vertx.hazelcast.test.group.password", new BigInteger(128, random).toString(32));
+    for (int i = 0; i < DATA_NODES; i++) {
+      dataNodes.add(Hazelcast.newHazelcastInstance(ConfigUtil.loadConfig()));
+    }
     super.setUp();
   }
 
   @Override
   protected ClusterManager getClusterManager() {
-    return new HazelcastClusterManager();
+    return new HazelcastClusterManager(ConfigUtil.loadConfig().setLiteMember(true));
+  }
+
+  @Override
+  protected void tearDown() throws Exception {
+    super.tearDown();
+    Lifecycle.closeDataNodes(dataNodes);
   }
 
   @Override
   protected void closeClustered(List<Vertx> clustered) throws Exception {
     Lifecycle.closeClustered(clustered);
+  }
+
+  @Override
+  protected void awaitLatch(CountDownLatch latch) throws InterruptedException {
+    assertTrue(latch.await(30, TimeUnit.SECONDS));
   }
 }
